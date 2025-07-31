@@ -1,10 +1,14 @@
-// server.js - Main server file for EcoMarga Backend API
+// server.js - Main server file for EcoMarga Backend API with PostgreSQL
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
 const helmet = require('helmet');
+const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 require('dotenv').config();
+
+// Import database configuration
+const { testConnection, initializeDatabase, closeConnection } = require('./config/database');
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -16,43 +20,108 @@ const statsRoutes = require('./routes/stats');
 
 // Import middleware
 const { authenticateToken, authorizeAdmin } = require('./middleware/auth');
-const errorHandler = require('./middleware/errorHandler');
+const { errorHandler, gracefulShutdown } = require('./middleware/errorHandler');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Security middleware
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
+
+// Compression middleware
+app.use(compression());
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
   message: {
     error: 'Terlalu banyak request, coba lagi nanti'
-  }
+  },
+  standardHeaders: true,
+  legacyHeaders: false
 });
 app.use('/api/', limiter);
 
 // CORS configuration
-app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
-  credentials: true
-}));
+const corsOptions = {
+  origin: function (origin, callback) {
+    const allowedOrigins = [
+      process.env.CLIENT_URL || 'http://localhost:5173',
+      'http://localhost:3000',
+      'http://localhost:5000'
+    ];
+    
+    // Allow requests with no origin (mobile apps, etc.)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+};
+app.use(cors(corsOptions));
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Logging middleware
-app.use(morgan('combined'));
+if (process.env.NODE_ENV === 'production') {
+  app.use(morgan('combined'));
+} else {
+  app.use(morgan('dev'));
+}
+
+// Static files middleware (for uploaded images)
+app.use('/uploads', express.static('uploads'));
 
 // Health check endpoint
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    message: 'EcoMarga API is running',
-    timestamp: new Date().toISOString()
+app.get('/health', async (req, res) => {
+  try {
+    const { healthCheck } = require('./config/database');
+    const dbHealth = await healthCheck();
+    
+    res.json({ 
+      status: 'OK', 
+      message: 'EcoMarga API is running',
+      timestamp: new Date().toISOString(),
+      database: dbHealth,
+      version: process.env.npm_package_version || '1.0.0',
+      node_version: process.version
+    });
+  } catch (error) {
+    res.status(503).json({
+      status: 'ERROR',
+      message: 'Service unavailable',
+      timestamp: new Date().toISOString(),
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Database connection failed'
+    });
+  }
+});
+
+// API documentation endpoint
+app.get('/api', (req, res) => {
+  res.json({
+    name: 'EcoMarga API',
+    version: '1.0.0',
+    description: 'Backend API for EcoMarga Bank Sampah Application',
+    endpoints: {
+      auth: '/api/auth',
+      users: '/api/users',
+      submissions: '/api/submissions',
+      bank_sampah: '/api/bank-sampah',
+      admin: '/api/admin',
+      stats: '/api/stats'
+    },
+    documentation: 'https://api.ecomarga.com/docs'
   });
 });
 
@@ -68,18 +137,84 @@ app.use('/api/admin', authenticateToken, authorizeAdmin, adminRoutes);
 app.use('*', (req, res) => {
   res.status(404).json({
     error: 'Endpoint tidak ditemukan',
-    message: `Path ${req.originalUrl} tidak tersedia`
+    message: `Path ${req.originalUrl} tidak tersedia`,
+    available_endpoints: [
+      '/api/auth',
+      '/api/users',
+      '/api/submissions',
+      '/api/bank-sampah',
+      '/api/admin',
+      '/api/stats',
+      '/health'
+    ]
   });
 });
 
 // Global error handler
 app.use(errorHandler);
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 EcoMarga API Server running on port ${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/health`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+// Start server with database initialization
+const startServer = async () => {
+  try {
+    console.log('🚀 Starting EcoMarga API Server...');
+    
+    // Test database connection
+    console.log('🔍 Testing database connection...');
+    const dbConnected = await testConnection();
+    
+    if (!dbConnected) {
+      console.error('❌ Database connection failed. Server cannot start.');
+      process.exit(1);
+    }
+    
+    // Initialize database (run migrations and seeds)
+    if (process.env.NODE_ENV !== 'production' || process.env.AUTO_MIGRATE === 'true') {
+      console.log('🔄 Initializing database...');
+      const dbInitialized = await initializeDatabase();
+      
+      if (!dbInitialized) {
+        console.error('❌ Database initialization failed. Server cannot start.');
+        process.exit(1);
+      }
+    }
+    
+    // Start the server
+    const server = app.listen(PORT, () => {
+      console.log(`✅ EcoMarga API Server running on port ${PORT}`);
+      console.log(`📊 Health check: http://localhost:${PORT}/health`);
+      console.log(`📚 API docs: http://localhost:${PORT}/api`);
+      console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`🗄️  Database: PostgreSQL`);
+      
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`🔗 Frontend URL: ${process.env.CLIENT_URL || 'http://localhost:5173'}`);
+      }
+    });
+    
+    // Setup graceful shutdown
+    gracefulShutdown(server, closeConnection);
+    
+  } catch (error) {
+    console.error('💥 Failed to start server:', error);
+    process.exit(1);
+  }
+};
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (err) => {
+  console.error('💥 Unhandled Promise Rejection:', err);
+  if (process.env.NODE_ENV === 'production') {
+    process.exit(1);
+  }
 });
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+  console.error('💥 Uncaught Exception:', err);
+  process.exit(1);
+});
+
+// Start the server
+startServer();
 
 module.exports = app;
