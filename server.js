@@ -1,4 +1,4 @@
-// server.js - Main server file for EcoMarga Backend API with PostgreSQL
+// server.js - Main server file for EcoMarga Backend API
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
@@ -20,7 +20,7 @@ const statsRoutes = require('./routes/stats');
 
 // Import middleware
 const { authenticateToken, authorizeAdmin } = require('./middleware/auth');
-const { errorHandler, gracefulShutdown } = require('./middleware/errorHandler');
+const { errorHandler } = require('./middleware/errorHandler');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -180,41 +180,41 @@ const startServer = async () => {
     
     // Start the server
     const server = app.listen(PORT, () => {
-      console.log(`✅ EcoMarga API Server running on port ${PORT}`);
-      console.log(`📊 Health check: http://localhost:${PORT}/health`);
+      console.log(`✅ Server is running on port ${PORT}`);
+      console.log(`🌐 API URL: http://localhost:${PORT}`);
+      console.log(`📱 Health check: http://localhost:${PORT}/health`);
       console.log(`📚 API docs: http://localhost:${PORT}/api`);
-      console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-      console.log(`🗄️  Database: PostgreSQL`);
-      
-      if (process.env.NODE_ENV === 'development') {
-        console.log(`🔗 Frontend URL: ${process.env.CLIENT_URL || 'http://localhost:5173'}`);
-      }
     });
     
-    // Setup graceful shutdown
-    gracefulShutdown(server, closeConnection);
+    // Graceful shutdown
+    const gracefulShutdown = async (signal) => {
+      console.log(`\n${signal} received. Starting graceful shutdown...`);
+      
+      server.close(async (err) => {
+        if (err) {
+          console.error('Error during server shutdown:', err);
+          process.exit(1);
+        }
+        
+        console.log('HTTP server closed.');
+        
+        // Close database connections
+        await closeConnection();
+        
+        console.log('Graceful shutdown complete.');
+        process.exit(0);
+      });
+    };
+    
+    // Handle shutdown signals
+    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
     
   } catch (error) {
-    console.error('💥 Failed to start server:', error);
+    console.error('❌ Failed to start server:', error.message);
     process.exit(1);
   }
 };
 
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (err) => {
-  console.error('💥 Unhandled Promise Rejection:', err);
-  if (process.env.NODE_ENV === 'production') {
-    process.exit(1);
-  }
-});
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (err) => {
-  console.error('💥 Uncaught Exception:', err);
-  process.exit(1);
-});
-
 // Start the server
 startServer();
-
-module.exports = app;

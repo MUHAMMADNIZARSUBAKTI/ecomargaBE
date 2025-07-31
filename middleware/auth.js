@@ -1,75 +1,75 @@
 // middleware/auth.js - Authentication and authorization middleware
 const jwt = require('jsonwebtoken');
-const { loadUsers } = require('../utils/dataHelpers');
+const { User } = require('../models');
 
 /**
  * Middleware to authenticate JWT token
  */
-const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+const authenticateToken = async (req, res, next) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
-  if (!token) {
-    return res.status(401).json({
-      error: 'Token akses diperlukan',
-      message: 'Silakan login untuk mengakses resource ini'
-    });
-  }
-
-  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
-    if (err) {
-      if (err.name === 'TokenExpiredError') {
-        return res.status(401).json({
-          error: 'Token expired',
-          message: 'Token akses sudah kedaluwarsa, silakan login ulang'
-        });
-      }
-      
-      if (err.name === 'JsonWebTokenError') {
-        return res.status(403).json({
-          error: 'Token tidak valid',
-          message: 'Format token tidak benar'
-        });
-      }
-
-      return res.status(403).json({
-        error: 'Token tidak valid',
-        message: 'Gagal memverifikasi token'
+    if (!token) {
+      return res.status(401).json({
+        error: 'Access token diperlukan',
+        message: 'Silakan login terlebih dahulu'
       });
     }
 
-    // Verify user still exists and is active
-    const users = loadUsers();
-    const user = users.find(u => u.id === decoded.id);
+    // Verify JWT token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // Get user from database
+    const user = await User.findById(decoded.id);
     
     if (!user) {
-      return res.status(403).json({
-        error: 'Pengguna tidak ditemukan',
-        message: 'User account tidak lagi tersedia'
+      return res.status(401).json({
+        error: 'User tidak ditemukan',
+        message: 'Token tidak valid'
       });
     }
 
     if (!user.is_active) {
-      return res.status(403).json({
-        error: 'Akun tidak aktif',
-        message: 'Akun Anda telah dinonaktifkan, hubungi administrator'
+      return res.status(401).json({
+        error: 'Akun dinonaktifkan',
+        message: 'Akun Anda telah dinonaktifkan'
       });
     }
 
-    // Add user info to request
+    // Attach user to request
     req.user = {
-      id: decoded.id,
-      email: decoded.email,
-      role: decoded.role,
+      id: user.id,
+      email: user.email,
+      role: user.role,
       nama: user.nama
     };
 
     next();
-  });
+  } catch (error) {
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({
+        error: 'Token tidak valid',
+        message: 'Silakan login ulang'
+      });
+    }
+    
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        error: 'Token expired',
+        message: 'Silakan login ulang'
+      });
+    }
+
+    console.error('Authentication error:', error);
+    return res.status(500).json({
+      error: 'Terjadi kesalahan server'
+    });
+  }
 };
 
 /**
- * Middleware to authorize admin access only
+ * Middleware to authorize admin access
  */
 const authorizeAdmin = (req, res, next) => {
   if (!req.user) {
@@ -142,36 +142,39 @@ const authorizeOwner = (req, res, next) => {
  * Optional authentication middleware
  * Continues even if no token is provided, but validates if present
  */
-const optionalAuth = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+const optionalAuth = async (req, res, next) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
 
-  if (!token) {
-    req.user = null;
-    return next();
-  }
-
-  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
-    if (err) {
+    if (!token) {
       req.user = null;
+      return next();
+    }
+
+    // Verify JWT token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // Get user from database
+    const user = await User.findById(decoded.id);
+    
+    if (user && user.is_active) {
+      req.user = {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        nama: user.nama
+      };
     } else {
-      const users = loadUsers();
-      const user = users.find(u => u.id === decoded.id);
-      
-      if (user && user.is_active) {
-        req.user = {
-          id: decoded.id,
-          email: decoded.email,
-          role: decoded.role,
-          nama: user.nama
-        };
-      } else {
-        req.user = null;
-      }
+      req.user = null;
     }
     
     next();
-  });
+  } catch (error) {
+    // If token is invalid, just continue without user
+    req.user = null;
+    next();
+  }
 };
 
 /**
@@ -243,48 +246,21 @@ const logActivity = (action) => {
  */
 const validateApiKey = (req, res, next) => {
   const apiKey = req.headers['x-api-key'];
-  const validApiKeys = process.env.VALID_API_KEYS ? process.env.VALID_API_KEYS.split(',') : [];
+  const validApiKeys = process.env.VALID_API_KEYS ? 
+    process.env.VALID_API_KEYS.split(',') : [];
 
-  if (!apiKey) {
+  if (validApiKeys.length === 0) {
+    // No API keys configured, skip validation
+    return next();
+  }
+
+  if (!apiKey || !validApiKeys.includes(apiKey)) {
     return res.status(401).json({
-      error: 'API key diperlukan',
-      message: 'Header X-API-Key harus disertakan'
+      error: 'Invalid API key',
+      message: 'Valid API key required'
     });
   }
 
-  if (!validApiKeys.includes(apiKey)) {
-    return res.status(403).json({
-      error: 'API key tidak valid'
-    });
-  }
-
-  next();
-};
-
-/**
- * Middleware to check maintenance mode
- */
-const checkMaintenanceMode = (req, res, next) => {
-  const maintenanceMode = process.env.MAINTENANCE_MODE === 'true';
-  
-  if (maintenanceMode) {
-    // Allow admin access during maintenance
-    if (req.user && req.user.role === 'admin') {
-      return next();
-    }
-    
-    // Allow health check during maintenance
-    if (req.path === '/health') {
-      return next();
-    }
-    
-    return res.status(503).json({
-      error: 'Sistem dalam maintenance',
-      message: 'Aplikasi sedang dalam perbaikan, silakan coba lagi nanti',
-      maintenance: true
-    });
-  }
-  
   next();
 };
 
@@ -296,6 +272,5 @@ module.exports = {
   optionalAuth,
   rateLimitSensitive,
   logActivity,
-  validateApiKey,
-  checkMaintenanceMode
+  validateApiKey
 };

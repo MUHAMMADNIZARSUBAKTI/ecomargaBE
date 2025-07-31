@@ -1,90 +1,57 @@
-// middleware/errorHandler.js - Global error handling middleware
-const fs = require('fs');
-const path = require('path');
-
-// Create logs directory if it doesn't exist
-const logsDir = path.join(__dirname, '..', 'logs');
-if (!fs.existsSync(logsDir)) {
-  fs.mkdirSync(logsDir, { recursive: true });
-}
+// middleware/errorHandler.js - Error handling middleware
+const logger = require('../utils/logger');
 
 /**
- * Log error to file
- */
-const logError = (error, req) => {
-  const timestamp = new Date().toISOString();
-  const logEntry = {
-    timestamp,
-    error: {
-      message: error.message,
-      stack: error.stack,
-      name: error.name
-    },
-    request: {
-      method: req.method,
-      url: req.originalUrl,
-      headers: req.headers,
-      body: req.body,
-      params: req.params,
-      query: req.query,
-      ip: req.ip,
-      userAgent: req.get('User-Agent')
-    },
-    user: req.user || null
-  };
-
-  const logString = JSON.stringify(logEntry, null, 2) + '\n';
-  const logFile = path.join(logsDir, `error-${new Date().toISOString().split('T')[0]}.log`);
-  
-  fs.appendFileSync(logFile, logString);
-};
-
-/**
- * Development error handler - shows full error details
+ * Development error handler - shows detailed error information
  */
 const developmentErrorHandler = (err, req, res, next) => {
-  const status = err.status || err.statusCode || 500;
+  const statusCode = err.status || err.statusCode || 500;
   
-  console.error('Error occurred:', {
+  logger.error('Development Error:', {
     message: err.message,
     stack: err.stack,
-    url: req.originalUrl,
+    url: req.url,
     method: req.method,
-    user: req.user
+    ip: req.ip,
+    userAgent: req.get('User-Agent'),
+    user: req.user ? req.user.id : 'anonymous'
   });
 
-  // Log error to file
-  logError(err, req);
-
-  res.status(status).json({
-    error: err.message || 'Internal Server Error',
+  res.status(statusCode).json({
+    success: false,
+    error: err.name || 'Error',
+    message: err.message,
     stack: err.stack,
     details: {
-      name: err.name,
-      status,
-      timestamp: new Date().toISOString(),
-      path: req.originalUrl,
-      method: req.method
+      url: req.url,
+      method: req.method,
+      timestamp: new Date().toISOString()
     }
   });
 };
 
 /**
- * Production error handler - shows minimal error details
+ * Production error handler - shows limited error information
  */
 const productionErrorHandler = (err, req, res, next) => {
-  const status = err.status || err.statusCode || 500;
+  const statusCode = err.status || err.statusCode || 500;
   
-  // Log error to file (but not to console in production)
-  logError(err, req);
+  logger.error('Production Error:', {
+    message: err.message,
+    url: req.url,
+    method: req.method,
+    ip: req.ip,
+    user: req.user ? req.user.id : 'anonymous'
+  });
 
   // Don't leak error details in production
-  const message = status < 500 ? err.message : 'Terjadi kesalahan pada server';
-  
-  res.status(status).json({
-    error: message,
-    timestamp: new Date().toISOString(),
-    requestId: req.id || Math.random().toString(36).substr(2, 9)
+  const message = statusCode >= 500 ? 'Terjadi kesalahan server' : err.message;
+
+  res.status(statusCode).json({
+    success: false,
+    error: 'Error',
+    message,
+    timestamp: new Date().toISOString()
   });
 };
 
@@ -95,6 +62,7 @@ const handleSpecificErrors = (err, req, res, next) => {
   // JWT Errors
   if (err.name === 'JsonWebTokenError') {
     return res.status(401).json({
+      success: false,
       error: 'Token tidak valid',
       message: 'Silakan login ulang'
     });
@@ -102,7 +70,8 @@ const handleSpecificErrors = (err, req, res, next) => {
 
   if (err.name === 'TokenExpiredError') {
     return res.status(401).json({
-      error: 'Token sudah kedaluwarsa',
+      success: false,
+      error: 'Token expired',
       message: 'Silakan login ulang'
     });
   }
@@ -110,58 +79,82 @@ const handleSpecificErrors = (err, req, res, next) => {
   // Validation Errors
   if (err.name === 'ValidationError') {
     return res.status(400).json({
-      error: 'Data tidak valid',
+      success: false,
+      error: 'Validation Error',
+      message: 'Data yang dikirim tidak valid',
       details: err.details || err.message
+    });
+  }
+
+  // Database Errors
+  if (err.code === '23505') { // PostgreSQL unique violation
+    return res.status(409).json({
+      success: false,
+      error: 'Data sudah ada',
+      message: 'Data dengan nilai tersebut sudah ada dalam database'
+    });
+  }
+
+  if (err.code === '23503') { // PostgreSQL foreign key violation
+    return res.status(400).json({
+      success: false,
+      error: 'Referensi tidak valid',
+      message: 'Data yang direferensikan tidak ditemukan'
+    });
+  }
+
+  if (err.code === '23502') { // PostgreSQL not null violation
+    return res.status(400).json({
+      success: false,
+      error: 'Data wajib tidak lengkap',
+      message: 'Semua field wajib harus diisi'
     });
   }
 
   // Multer Errors (File Upload)
   if (err.code === 'LIMIT_FILE_SIZE') {
     return res.status(400).json({
+      success: false,
       error: 'File terlalu besar',
-      message: 'Ukuran file maksimal 5MB'
+      message: `Ukuran file maksimal ${(parseInt(process.env.MAX_FILE_SIZE) || 5242880) / 1024 / 1024}MB`
     });
   }
 
   if (err.code === 'LIMIT_FILE_COUNT') {
     return res.status(400).json({
+      success: false,
       error: 'Terlalu banyak file',
-      message: 'Maksimal 5 file dapat diupload'
+      message: 'Maksimal 10 file dapat diupload sekaligus'
     });
   }
 
   if (err.code === 'LIMIT_UNEXPECTED_FILE') {
     return res.status(400).json({
-      error: 'Field file tidak dikenal',
-      message: 'Pastikan nama field file sesuai dengan yang diharapkan'
+      success: false,
+      error: 'Field file tidak dikenali',
+      message: 'Periksa nama field untuk upload file'
     });
   }
 
-  // Database/File System Errors
-  if (err.code === 'ENOENT') {
-    return res.status(404).json({
-      error: 'File tidak ditemukan',
-      message: 'Resource yang diminta tidak tersedia'
+  // CORS Errors
+  if (err.message && err.message.includes('CORS policy')) {
+    return res.status(403).json({
+      success: false,
+      error: 'CORS Error',
+      message: 'Origin tidak diizinkan'
     });
   }
 
-  if (err.code === 'EACCES') {
-    return res.status(500).json({
-      error: 'Tidak ada akses ke file',
-      message: 'Terjadi kesalahan server'
-    });
-  }
-
-  // Rate Limiting Errors
-  if (err.status === 429) {
+  // Rate Limit Errors
+  if (err.statusCode === 429) {
     return res.status(429).json({
+      success: false,
       error: 'Terlalu banyak request',
-      message: 'Silakan tunggu beberapa saat sebelum mencoba lagi',
-      retryAfter: err.retryAfter || 900 // 15 minutes default
+      message: 'Anda telah mencapai batas maksimal request'
     });
   }
 
-  // Continue to general error handler
+  // Continue to next error handler
   next(err);
 };
 
@@ -216,92 +209,39 @@ const gracefulShutdown = (server) => {
       console.log('HTTP server closed.');
       
       // Close database connections, cleanup, etc.
-      // In this case, we're using file-based storage, so no cleanup needed
-      
-      console.log('Graceful shutdown complete.');
-      process.exit(0);
+      const { closeConnection } = require('../config/database');
+      closeConnection().then(() => {
+        console.log('Graceful shutdown complete.');
+        process.exit(0);
+      }).catch((error) => {
+        console.error('Error during database cleanup:', error);
+        process.exit(1);
+      });
     });
     
-    // Force close server after 30 seconds
+    // Force close after 30 seconds
     setTimeout(() => {
       console.error('Could not close connections in time, forcefully shutting down');
       process.exit(1);
     }, 30000);
   };
 
-  // Listen for termination signals
+  // Handle different shutdown signals
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+  
+  // Handle uncaught exceptions
+  process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+    shutdown('UNCAUGHT_EXCEPTION');
+  });
+  
+  // Handle unhandled promise rejections
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    shutdown('UNHANDLED_REJECTION');
+  });
 };
-
-/**
- * Handle uncaught exceptions
- */
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
-  
-  // Log to file
-  const logEntry = {
-    timestamp: new Date().toISOString(),
-    type: 'uncaughtException',
-    error: {
-      message: err.message,
-      stack: err.stack,
-      name: err.name
-    }
-  };
-  
-  const logString = JSON.stringify(logEntry, null, 2) + '\n';
-  const logFile = path.join(logsDir, `uncaught-${new Date().toISOString().split('T')[0]}.log`);
-  
-  try {
-    fs.appendFileSync(logFile, logString);
-  } catch (logErr) {
-    console.error('Failed to log uncaught exception:', logErr);
-  }
-  
-  // In production, you might want to restart the process
-  if (process.env.NODE_ENV === 'production') {
-    console.log('Process will restart in 1 second...');
-    setTimeout(() => {
-      process.exit(1);
-    }, 1000);
-  } else {
-    process.exit(1);
-  }
-});
-
-/**
- * Handle unhandled promise rejections
- */
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  
-  // Log to file
-  const logEntry = {
-    timestamp: new Date().toISOString(),
-    type: 'unhandledRejection',
-    reason: reason?.message || reason,
-    stack: reason?.stack
-  };
-  
-  const logString = JSON.stringify(logEntry, null, 2) + '\n';
-  const logFile = path.join(logsDir, `unhandled-${new Date().toISOString().split('T')[0]}.log`);
-  
-  try {
-    fs.appendFileSync(logFile, logString);
-  } catch (logErr) {
-    console.error('Failed to log unhandled rejection:', logErr);
-  }
-  
-  // Don't exit the process for unhandled rejections in development
-  if (process.env.NODE_ENV === 'production') {
-    console.log('Process will restart in 1 second...');
-    setTimeout(() => {
-      process.exit(1);
-    }, 1000);
-  }
-});
 
 module.exports = {
   errorHandler,

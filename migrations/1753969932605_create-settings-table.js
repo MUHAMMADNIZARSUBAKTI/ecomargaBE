@@ -1,28 +1,21 @@
-/**
- * @param { import("knex").Knex } knex
- * @returns { Promise<void> }
- */
+// migrations/007_create_settings_table.js
 exports.up = function(knex) {
   return knex.schema.createTable('settings', function(table) {
     table.increments('id').primary();
     table.string('key', 100).unique().notNullable();
-    table.jsonb('value').notNullable();
-    table.text('description').nullable();
-    table.string('category', 50).defaultTo('general');
-    table.boolean('is_public').defaultTo(false); // whether frontend can access this setting
+    table.json('value'); // Store as JSON for flexibility
+    table.text('description');
+    table.string('category', 50);
+    table.boolean('is_public').defaultTo(false); // Can be accessed by non-admin users
     table.timestamps(true, true);
     
     // Indexes
-    table.index(['key']);
-    table.index(['category']);
-    table.index(['is_public']);
+    table.index('key');
+    table.index('category');
+    table.index('is_public');
   });
 };
 
-/**
- * @param { import("knex").Knex } knex
- * @returns { Promise<void> }
- */
 exports.down = function(knex) {
-  return knex.schema.dropTableIfExists('settings');
+  return knex.schema.dropTable('settings');
 };
