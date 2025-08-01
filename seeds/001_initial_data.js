@@ -23,38 +23,38 @@ exports.seed = async function(knex) {
     }
     console.log('');
     
+    // ========================================
+    // 1. CLEAR EXISTING DATA (in correct order to avoid FK constraints)
+    // ========================================
+    console.log('🧹 Clearing existing data...');
+    
+    await knex('audit_logs').del();
+    await knex('file_uploads').del();
+    await knex('reviews').del();
+    await knex('transactions').del();
+    await knex('notifications').del();
+    await knex('submissions').del();
+    await knex('waste_types').del();
+    await knex('settings').del();
+    await knex('bank_sampah').del();
+    await knex('users').del();
+    
+    // Reset auto-increment sequences
+    const sequences = [
+      'users_id_seq', 'bank_sampah_id_seq', 'submissions_id_seq', 
+      'settings_id_seq', 'notifications_id_seq', 'transactions_id_seq',
+      'reviews_id_seq', 'waste_types_id_seq', 'file_uploads_id_seq', 
+      'audit_logs_id_seq'
+    ];
+    
+    for (const seq of sequences) {
+      await knex.raw(`ALTER SEQUENCE ${seq} RESTART WITH 1`);
+    }
   } catch (error) {
     console.error('❌ Seeding failed:', error);
     throw error;
-}
-
-  // ========================================
-  // 1. CLEAR EXISTING DATA (in correct order to avoid FK constraints)
-  // ========================================
-  console.log('🧹 Clearing existing data...');
-  
-  await knex('audit_logs').del();
-  await knex('file_uploads').del();
-  await knex('reviews').del();
-  await knex('transactions').del();
-  await knex('notifications').del();
-  await knex('submissions').del();
-  await knex('waste_types').del();
-  await knex('settings').del();
-  await knex('bank_sampah').del();
-  await knex('users').del();
-  
-  // Reset auto-increment sequences
-  const sequences = [
-    'users_id_seq', 'bank_sampah_id_seq', 'submissions_id_seq', 
-    'settings_id_seq', 'notifications_id_seq', 'transactions_id_seq',
-    'reviews_id_seq', 'waste_types_id_seq', 'file_uploads_id_seq', 
-    'audit_logs_id_seq'
-  ];
-  
-  for (const seq of sequences) {
-    await knex.raw(`ALTER SEQUENCE ${seq} RESTART WITH 1`);
   }
+};
 
     // ========================================
     // 2. INSERT USERS

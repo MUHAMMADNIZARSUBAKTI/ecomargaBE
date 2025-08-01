@@ -1,4 +1,4 @@
-// server.js - Main server file for EcoMarga Backend API
+// server.js - Main server file for EcoMarga Backend API (Minimal Version)
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
@@ -10,17 +10,17 @@ require('dotenv').config();
 // Import database configuration
 const { testConnection, initializeDatabase, closeConnection } = require('./config/database');
 
-// Import routes
+// Import routes (only the ones that exist)
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const submissionRoutes = require('./routes/submissions');
-const bankSampahRoutes = require('./routes/bankSampah');
-const adminRoutes = require('./routes/admin');
-const statsRoutes = require('./routes/stats');
+// const bankSampahRoutes = require('./routes/bankSampah');
+// const adminRoutes = require('./routes/admin');
+// const statsRoutes = require('./routes/stats');
 
 // Import middleware
 const { authenticateToken, authorizeAdmin } = require('./middleware/auth');
-const { errorHandler } = require('./middleware/errorHandler');
+// const { errorHandler } = require('./middleware/errorHandler');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -57,52 +57,50 @@ const corsOptions = {
     // Allow requests with no origin (mobile apps, etc.)
     if (!origin) return callback(null, true);
     
-    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
+    if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
     }
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 };
+
 app.use(cors(corsOptions));
+
+// Logging middleware
+if (process.env.NODE_ENV === 'development') {
+  app.use(morgan('dev'));
+}
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Logging middleware
-if (process.env.NODE_ENV === 'production') {
-  app.use(morgan('combined'));
-} else {
-  app.use(morgan('dev'));
-}
-
-// Static files middleware (for uploaded images)
+// Serve static files
 app.use('/uploads', express.static('uploads'));
 
 // Health check endpoint
 app.get('/health', async (req, res) => {
   try {
-    const { healthCheck } = require('./config/database');
-    const dbHealth = await healthCheck();
+    // Test database connection
+    const dbStatus = await testConnection();
     
-    res.json({ 
-      status: 'OK', 
-      message: 'EcoMarga API is running',
+    res.json({
+      status: 'OK',
       timestamp: new Date().toISOString(),
-      database: dbHealth,
-      version: process.env.npm_package_version || '1.0.0',
-      node_version: process.version
+      uptime: process.uptime(),
+      environment: process.env.NODE_ENV,
+      database: dbStatus ? 'connected' : 'disconnected',
+      version: '1.0.0'
     });
   } catch (error) {
     res.status(503).json({
       status: 'ERROR',
-      message: 'Service unavailable',
       timestamp: new Date().toISOString(),
-      error: process.env.NODE_ENV === 'development' ? error.message : 'Database connection failed'
+      error: 'Database connection failed'
     });
   }
 });
@@ -114,24 +112,24 @@ app.get('/api', (req, res) => {
     version: '1.0.0',
     description: 'Backend API for EcoMarga Bank Sampah Application',
     endpoints: {
-      auth: '/api/auth',
-      users: '/api/users',
+      // auth: '/api/auth',
+      // users: '/api/users',
       submissions: '/api/submissions',
-      bank_sampah: '/api/bank-sampah',
-      admin: '/api/admin',
-      stats: '/api/stats'
+      // bank_sampah: '/api/bank-sampah',
+      // admin: '/api/admin',
+      // stats: '/api/stats'
     },
     documentation: 'https://api.ecomarga.com/docs'
   });
 });
 
-// API Routes
+// API Routes (only enabled ones)
 app.use('/api/auth', authRoutes);
 app.use('/api/users', authenticateToken, userRoutes);
 app.use('/api/submissions', authenticateToken, submissionRoutes);
-app.use('/api/bank-sampah', bankSampahRoutes);
-app.use('/api/stats', authenticateToken, statsRoutes);
-app.use('/api/admin', authenticateToken, authorizeAdmin, adminRoutes);
+// app.use('/api/bank-sampah', bankSampahRoutes);
+// app.use('/api/stats', authenticateToken, statsRoutes);
+// app.use('/api/admin', authenticateToken, authorizeAdmin, adminRoutes);
 
 // Catch 404 errors
 app.use('*', (req, res) => {
@@ -139,24 +137,32 @@ app.use('*', (req, res) => {
     error: 'Endpoint tidak ditemukan',
     message: `Path ${req.originalUrl} tidak tersedia`,
     available_endpoints: [
-      '/api/auth',
-      '/api/users',
+      // '/api/auth',
+      // '/api/users',
       '/api/submissions',
-      '/api/bank-sampah',
-      '/api/admin',
-      '/api/stats',
+      // '/api/bank-sampah',
+      // '/api/admin',
+      // '/api/stats',
       '/health'
     ]
   });
 });
 
-// Global error handler
-app.use(errorHandler);
+// Simple error handler (since errorHandler middleware might not exist yet)
+app.use((err, req, res, next) => {
+  console.error('Error:', err);
+  
+  res.status(err.status || 500).json({
+    success: false,
+    error: process.env.NODE_ENV === 'development' ? err.message : 'Terjadi kesalahan server',
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+  });
+});
 
 // Start server with database initialization
 const startServer = async () => {
   try {
-    console.log('🚀 Starting EcoMarga API Server...');
+    console.log('🚀 Starting EcoMarga API Server (Minimal Version)...');
     
     // Test database connection
     console.log('🔍 Testing database connection...');
@@ -164,6 +170,7 @@ const startServer = async () => {
     
     if (!dbConnected) {
       console.error('❌ Database connection failed. Server cannot start.');
+      console.log('💡 Make sure PostgreSQL is running and .env is configured correctly.');
       process.exit(1);
     }
     
@@ -173,8 +180,7 @@ const startServer = async () => {
       const dbInitialized = await initializeDatabase();
       
       if (!dbInitialized) {
-        console.error('❌ Database initialization failed. Server cannot start.');
-        process.exit(1);
+        console.warn('⚠️  Database initialization failed, but server will start anyway.');
       }
     }
     
@@ -184,6 +190,15 @@ const startServer = async () => {
       console.log(`🌐 API URL: http://localhost:${PORT}`);
       console.log(`📱 Health check: http://localhost:${PORT}/health`);
       console.log(`📚 API docs: http://localhost:${PORT}/api`);
+      console.log('');
+      console.log('📝 Available endpoints:');
+      console.log('   - GET  /health');
+      console.log('   - GET  /api');
+      console.log('   - POST /api/submissions (requires auth)');
+      console.log('   - GET  /api/submissions (requires auth)');
+      console.log('');
+      console.log('⚠️  This is a minimal version. Some routes are disabled.');
+      console.log('   Enable routes in server.js as you create the required files.');
     });
     
     // Graceful shutdown
@@ -205,13 +220,13 @@ const startServer = async () => {
         process.exit(0);
       });
     };
-    
-    // Handle shutdown signals
-    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+    // Handle termination signals
+    process.on('SIGTERM', gracefulShutdown);
+    process.on('SIGINT', gracefulShutdown);
     
   } catch (error) {
-    console.error('❌ Failed to start server:', error.message);
+    console.error('❌ Failed to start server:', error);
     process.exit(1);
   }
 };

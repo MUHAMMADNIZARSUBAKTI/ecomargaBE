@@ -18,8 +18,13 @@ const knexConfig = {
     pool: {
       min: parseInt(process.env.DB_POOL_MIN) || 2,
       max: parseInt(process.env.DB_POOL_MAX) || 10,
-      acquireConnectionTimeout: parseInt(process.env.DB_ACQUIRE_CONNECTION_TIMEOUT) || 60000,
-      idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT) || 30000
+      // Ganti acquireConnectionTimeout dengan acquireTimeoutMillis
+      acquireTimeoutMillis: parseInt(process.env.DB_ACQUIRE_CONNECTION_TIMEOUT) || 60000,
+      idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT) || 30000,
+      // Tambahan konfigurasi pool yang kompatibel
+      createTimeoutMillis: 30000,
+      destroyTimeoutMillis: 5000,
+      reapIntervalMillis: 1000
     },
     migrations: {
       tableName: 'knex_migrations',
@@ -41,7 +46,13 @@ const knexConfig = {
     },
     pool: {
       min: parseInt(process.env.DB_POOL_MIN) || 2,
-      max: parseInt(process.env.DB_POOL_MAX) || 10
+      max: parseInt(process.env.DB_POOL_MAX) || 10,
+      // Gunakan acquireTimeoutMillis
+      acquireTimeoutMillis: parseInt(process.env.DB_ACQUIRE_CONNECTION_TIMEOUT) || 60000,
+      idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT) || 30000,
+      createTimeoutMillis: 30000,
+      destroyTimeoutMillis: 5000,
+      reapIntervalMillis: 1000
     },
     migrations: {
       tableName: 'knex_migrations',
@@ -59,6 +70,12 @@ const knexConfig = {
       database: process.env.DB_NAME_TEST || 'ecomarga_test',
       user: process.env.DB_USER || 'ecomarga_user',
       password: process.env.DB_PASSWORD || 'password'
+    },
+    pool: {
+      min: 1,
+      max: 5,
+      acquireTimeoutMillis: 30000,
+      idleTimeoutMillis: 30000
     },
     migrations: {
       tableName: 'knex_migrations',
@@ -90,22 +107,21 @@ const testConnection = async () => {
 };
 
 /**
- * Initialize database (run migrations)
+ * Initialize database (run migrations and seeds)
  */
 const initializeDatabase = async () => {
   try {
     console.log('🔄 Running database migrations...');
     await db.migrate.latest();
-    console.log('✅ Database migrations completed');
-    
-    // Check if we need to seed data
-    const userCount = await db('users').count('id as count').first();
-    if (parseInt(userCount.count) === 0) {
-      console.log('🌱 Seeding initial data...');
+    console.log('✅ Migrations completed');
+
+    // Only run seeds in development
+    if (environment === 'development') {
+      console.log('🌱 Running database seeds...');
       await db.seed.run();
-      console.log('✅ Database seeding completed');
+      console.log('✅ Seeds completed');
     }
-    
+
     return true;
   } catch (error) {
     console.error('❌ Database initialization failed:', error.message);
@@ -114,64 +130,14 @@ const initializeDatabase = async () => {
 };
 
 /**
- * Gracefully close database connection
+ * Close database connection
  */
 const closeConnection = async () => {
   try {
     await db.destroy();
-    console.log('🔌 Database connection closed');
+    console.log('✅ Database connection closed');
   } catch (error) {
     console.error('❌ Error closing database connection:', error.message);
-  }
-};
-
-/**
- * Health check function
- */
-const healthCheck = async () => {
-  try {
-    const result = await db.raw('SELECT NOW() as timestamp');
-    return {
-      status: 'healthy',
-      timestamp: result.rows[0].timestamp,
-      connection: 'active'
-    };
-  } catch (error) {
-    return {
-      status: 'unhealthy',
-      error: error.message,
-      connection: 'failed'
-    };
-  }
-};
-
-/**
- * Database cleanup for testing
- */
-const cleanupTestDatabase = async () => {
-  if (environment !== 'testing') {
-    throw new Error('Cleanup only allowed in testing environment');
-  }
-
-  try {
-    // Get all table names
-    const result = await db.raw(`
-      SELECT tablename FROM pg_tables 
-      WHERE schemaname = 'public' 
-      AND tablename != 'knex_migrations'
-    `);
-    
-    const tables = result.rows.map(row => row.tablename);
-    
-    // Truncate all tables
-    for (const table of tables) {
-      await db.raw(`TRUNCATE TABLE "${table}" RESTART IDENTITY CASCADE`);
-    }
-    
-    console.log('✅ Test database cleaned');
-  } catch (error) {
-    console.error('❌ Database cleanup failed:', error.message);
-    throw error;
   }
 };
 
@@ -179,8 +145,5 @@ module.exports = {
   db,
   testConnection,
   initializeDatabase,
-  closeConnection,
-  healthCheck,
-  cleanupTestDatabase,
-  knexConfig
+  closeConnection
 };
