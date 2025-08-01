@@ -162,81 +162,52 @@ app.use((err, req, res, next) => {
 // Start server with database initialization
 const startServer = async () => {
   try {
-    console.log('🚀 Starting EcoMarga API Server (Minimal Version)...');
+    console.log('🚀 Starting EcoMarga API Server...');
+    console.log('🌍 Environment:', process.env.NODE_ENV);
+    console.log('🔗 DATABASE_URL exists:', !!process.env.DATABASE_URL);
     
-    // Test database connection
-    console.log('🔍 Testing database connection...');
-    const dbConnected = await testConnection();
+    // Test database connection with retry
+    let dbConnected = false;
+    let attempts = 0;
+    const maxAttempts = 5;
     
-    if (!dbConnected) {
-      console.error('❌ Database connection failed. Server cannot start.');
-      console.log('💡 Make sure PostgreSQL is running and .env is configured correctly.');
-      process.exit(1);
-    }
-    
-    // Initialize database (run migrations and seeds)
-    if (process.env.NODE_ENV !== 'production' || process.env.AUTO_MIGRATE === 'true') {
-      console.log('🔄 Initializing database...');
-      const dbInitialized = await initializeDatabase();
+    while (!dbConnected && attempts < maxAttempts) {
+      attempts++;
+      console.log(`🔍 Database connection attempt ${attempts}/${maxAttempts}...`);
       
-      if (!dbInitialized) {
-        console.warn('⚠️  Database initialization failed, but server will start anyway.');
+      dbConnected = await testConnection();
+      
+      if (!dbConnected && attempts < maxAttempts) {
+        console.log('⏳ Retrying in 5 seconds...');
+        await new Promise(resolve => setTimeout(resolve, 5000));
       }
     }
-
-    const PORT = process.env.PORT || 3001;
-
+    
+    if (!dbConnected) {
+      console.error('❌ Database connection failed after', maxAttempts, 'attempts');
+      console.log('💡 Debug info:');
+      console.log('- NODE_ENV:', process.env.NODE_ENV);
+      console.log('- DATABASE_URL present:', !!process.env.DATABASE_URL);
+      console.log('- DATABASE_URL preview:', process.env.DATABASE_URL?.substring(0, 50) + '...');
+      
+      // Don't exit - start server anyway for debugging
+      console.log('⚠️  Starting server without database for debugging...');
+    } else {
+      // Run migrations only if connected
+      console.log('🔄 Running migrations...');
+      await initializeDatabase();
+    }
+    
+    // Start server
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`🌍 Environment: ${process.env.NODE_ENV}`);
+      console.log(`🌐 Health check: https://your-app.up.railway.app/health`);
+      console.log(`📊 Database status: ${dbConnected ? 'Connected' : 'Disconnected'}`);
     });
-    
-    // Start the server
-    const server = app.listen(PORT, () => {
-      console.log(`✅ Server is running on port ${PORT}`);
-      console.log(`🌐 API URL: http://localhost:${PORT}`);
-      console.log(`📱 Health check: http://localhost:${PORT}/health`);
-      console.log(`📚 API docs: http://localhost:${PORT}/api`);
-      console.log('');
-      console.log('📝 Available endpoints:');
-      console.log('   - GET  /health');
-      console.log('   - GET  /api');
-      console.log('   - POST /api/submissions (requires auth)');
-      console.log('   - GET  /api/submissions (requires auth)');
-      console.log('');
-      console.log('⚠️  This is a minimal version. Some routes are disabled.');
-      console.log('   Enable routes in server.js as you create the required files.');
-    });
-    
-    // Graceful shutdown
-    const gracefulShutdown = async (signal) => {
-      console.log(`\n${signal} received. Starting graceful shutdown...`);
-      
-      server.close(async (err) => {
-        if (err) {
-          console.error('Error during server shutdown:', err);
-          process.exit(1);
-        }
-        
-        console.log('HTTP server closed.');
-        
-        // Close database connections
-        await closeConnection();
-        
-        console.log('Graceful shutdown complete.');
-        process.exit(0);
-      });
-    };
-
-    // Handle termination signals
-    process.on('SIGTERM', gracefulShutdown);
-    process.on('SIGINT', gracefulShutdown);
-    
   } catch (error) {
-    console.error('❌ Failed to start server:', error);
+    console.error('❌ Server startup failed:', error);
     process.exit(1);
   }
 };
 
-// Start the server
 startServer();
