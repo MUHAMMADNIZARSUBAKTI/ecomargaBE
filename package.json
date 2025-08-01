@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
+    "build": "npm install",
     "test": "jest",
     "test:watch": "jest --watch",
     "seed": "node scripts/seedDatabase.js",
